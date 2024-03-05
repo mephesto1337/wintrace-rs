@@ -1,0 +1,16 @@
+[package]
+name = "wintrace"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+base64 = "0.22.0"
+ctor = "0.2.7"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+windows = { version = "0.54.0", features = ["Win32_Foundation", "Win32_System", "Win32_System_Diagnostics", "Win32_System_Diagnostics_Debug", "Win32_System_Diagnostics_Debug_Extensions", "Win32_System_SystemInformation", "Win32_System_SystemServices"] }
