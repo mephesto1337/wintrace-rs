@@ -67,12 +67,14 @@ pub(super) fn deinit() {
     deinitialize_at(&HANDLES);
     deinitialize_at(&readfile::READFILE_ARGS);
     deinitialize_at(&createfile::CREATEFILE_ARGS);
+    deinitialize_at(&writefile::WRITEFILE_ARGS);
 }
 
 pub(super) fn init() {
     initialize_with(&HANDLES, Default::default);
     initialize_with(&createfile::CREATEFILE_ARGS, Default::default);
     initialize_with(&readfile::READFILE_ARGS, Default::default);
+    initialize_with(&writefile::WRITEFILE_ARGS, Default::default);
     let logfilename = helpers::expand_env(r"%USERPROFILE%\Desktop\wintrace.log");
     match std::fs::OpenOptions::new()
         .append(true)
