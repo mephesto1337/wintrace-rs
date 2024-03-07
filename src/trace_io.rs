@@ -81,7 +81,7 @@ pub(super) fn init() {
     {
         Ok(f) => {
             let _ = env_logger::builder()
-                .filter_level(log::LevelFilter::Debug)
+                .filter_level(log::LevelFilter::Info)
                 .target(env_logger::Target::Pipe(Box::new(f) as Box<_>))
                 .try_init();
         }
@@ -116,9 +116,7 @@ fn register_handle(handle: usize, filename: String) -> Result<()> {
             "Could not lock handles for writing",
         )
     })?;
-    log::debug!("Before handles.insert");
     handles.insert(handle, filename);
-    log::debug!("After  handles.insert");
     Ok(())
 }
 

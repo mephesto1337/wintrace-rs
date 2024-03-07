@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde::Serialize;
 use std::{
     ffi::c_void,
@@ -11,7 +12,7 @@ use std::{
 };
 use windows::{
     core::{Error, HRESULT, PCSTR},
-    Win32::Foundation::S_OK,
+    Win32::Foundation::{ERROR_BAD_FORMAT, S_OK},
 };
 
 #[macro_export]
@@ -38,7 +39,21 @@ pub fn save_call<S: Serialize>(obj: &S) {
 
 #[no_mangle]
 pub extern "C" fn wintrace(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
-    wrap(raw_client, args, "wintrace", |dbg, _| {
+    wrap(raw_client, args, "wintrace", |dbg, args| {
+        if !args.is_empty() {
+            let re = match Regex::new(&args) {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Invalid regex {args:?}: {e}");
+                    return Err(windows::core::Error::new(
+                        ERROR_BAD_FORMAT.into(),
+                        "Invalid regex",
+                    ));
+                }
+            };
+            trace_io::createfile::CREATE_FILE_REGEX
+                .store(Box::into_raw(Box::new(re)), Ordering::Relaxed);
+        }
         dbg.retprobe("KERNELBASE!CreateFileA")?;
         dbg.retprobe("KERNELBASE!CreateFileW")?;
         dbg.retprobe("kernel32!ReadFile")?;
@@ -75,5 +90,9 @@ extern "C" fn DebugExtensionUninitialize() {
     let file_ptr = LOG_FILE.swap(ptr::null_mut(), Ordering::Relaxed);
     if !file_ptr.is_null() {
         let _ = unsafe { Box::from_raw(file_ptr) };
+    }
+    let re_ptr = trace_io::createfile::CREATE_FILE_REGEX.swap(ptr::null_mut(), Ordering::Relaxed);
+    if !re_ptr.is_null() {
+        let _ = unsafe { Box::from_raw(re_ptr) };
     }
 }

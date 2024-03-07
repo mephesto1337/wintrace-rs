@@ -1,13 +1,18 @@
 use crate::{debugger::Debugger, get_args, trace_call};
+use regex::Regex;
 use std::{
     collections::HashMap,
     ptr,
-    sync::{atomic::AtomicPtr, Mutex},
+    sync::{
+        atomic::{AtomicPtr, Ordering},
+        Mutex,
+    },
 };
 use windows::core::Result;
 
 pub(super) static CREATEFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, CreateFileArgs>>> =
     AtomicPtr::new(ptr::null_mut());
+pub static CREATE_FILE_REGEX: AtomicPtr<Regex> = AtomicPtr::new(ptr::null_mut());
 
 pub(super) struct CreateFileArgs {
     filename: String,
@@ -22,19 +27,20 @@ fn get_args(dbg: &Debugger) -> Result<Option<CreateFileArgs>> {
 }
 
 fn filter_createfile(dbg: &Debugger, filename_addr: usize, wide_string: bool) -> Result<bool> {
-    log::debug!("In filter_createfile(filename_addr={filename_addr:x})");
     let filename = if wide_string {
         dbg.read_wstring(filename_addr)?
     } else {
         dbg.read_cstring(filename_addr)?
     };
-    let interested = filename == r"\\.\pipe\SpotlightHostConnectionService"
-        || filename.starts_with(r"\\.\pipe\Avira");
-    log::debug!(
-        "CreateFile{}({filename:?}): {}interested",
-        if wide_string { 'W' } else { 'A' },
-        if interested { "" } else { "not " }
-    );
+
+    let regex_ptr = CREATE_FILE_REGEX.load(Ordering::Relaxed);
+    let interested = if !regex_ptr.is_null() {
+        let re = unsafe { &*regex_ptr };
+        re.is_match(&filename)
+    } else {
+        true
+    };
+
     if interested {
         let args = CreateFileArgs { filename };
         register_args(dbg, args)?;
