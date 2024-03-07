@@ -75,6 +75,7 @@ macro_rules! get_args {
     };
 }
 
+/// `$filter` must store whatever necessary for `$exit_body`
 #[macro_export]
 macro_rules! trace_call {
     ($exportname:ident, $dbg:ident, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
@@ -109,19 +110,15 @@ macro_rules! trace_call {
                         log::warn!("callback for {} failed: {}", stringify!($funcname), e.message());
                     }
                 }
+                $dbg.go();
                 Ok(())
             })
         }
     };
-}
-
-/// `$filter` must store whatever necessary for `$exit_body`
-#[macro_export]
-macro_rules! trace_call_return {
-    ($exportname:ident, $dbg:ident, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
-        trace_call_return!($exportname, $dbg, {{ Ok(true) }}, $funcname ( $($args),* ) { $body });
+    (RET $exportname:ident, $dbg:ident, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
+        trace_call!(RET $exportname, $dbg, {{ Ok(true) }}, $funcname ( $($args),* ) { $body });
     };
-    ($exportname:ident, $dbg:ident, { $filter:expr }, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
+    (RET $exportname:ident, $dbg:ident, { $filter:expr }, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
         #[no_mangle]
         pub extern "C" fn $exportname(raw_client: *mut ::std::ffi::c_void, args: ::windows::core::PCSTR) -> ::windows::core::HRESULT {
             $crate::helpers::wrap( raw_client, args, stringify!($funcname), |$dbg, args| -> Result<()> {
@@ -129,31 +126,45 @@ macro_rules! trace_call_return {
                 let ip = $dbg.get_ip()?;
                 log::debug!("break on 0x{ip:x} for {} with {args:?}", stringify!($funcname));
 
-                if args == "filter" {
-                    get_args!($dbg, $($args),*);
+                match args.as_str() {
+                    "entry" => {
+                        get_args!($dbg, $($args),*);
 
-                    #[allow(unused_variables)]
-                    fn filter_func($dbg: &$crate::debugger::Debugger, $($args: usize),*) -> ::windows::core::Result<bool> {
-                        $filter
-                    }
-                    let interested = filter_func($dbg, $($args),*);
+                        #[allow(unused_variables)]
+                        fn filter_func($dbg: &$crate::debugger::Debugger, $($args: usize),*) -> ::windows::core::Result<bool> {
+                            $filter
+                        }
+                        let interested = filter_func($dbg, $($args),*);
 
-                    if log::log_enabled!(log::Level::Debug) {
-                        let mut args = String::new();
-                        $(write!(&mut args, ", {}={:x}", stringify!($args), $args).unwrap();)*
+                        if log::log_enabled!(log::Level::Debug) {
+                            let mut args = String::new();
+                            $(write!(&mut args, ", {}={:x}", stringify!($args), $args).unwrap();)*
 
-                        log::debug!("{}({}): interested={:?}", stringify!($funcname), &args[2..], interested);
+                            log::debug!("{}({}): interested={:?}", stringify!($funcname), &args[2..], interested);
+                        }
+                        if interested == Ok(true) {
+                            let bp = $dbg.add_breakpoint("@$ra", Some(format!("!{} exit", stringify!($exportname))))?;
+                            bp.oneshot()?;
+                        }
+                    },
+                    "exit" => {
+                        fn body($dbg: &$crate::debugger::Debugger) -> ::windows::core::Result<()> {
+                            log::debug!("entring !{} body({})", stringify!($exportname), stringify!($body));
+                            let res = $body;
+                            log::debug!("exiting !{} body({res:?})", stringify!($exportname));
+                            res
+                        }
+                        if let Err(e) = body($dbg) {
+                            log::warn!("callback for {} failed: {}", stringify!($funcname), e.message());
+                        }
                     }
-                    Ok(())
-                } else {
-                    fn body($dbg: &$crate::debugger::Debugger) -> ::windows::core::Result<()> {
-                        $body
+                    _ => {
+                        log::warn!("Unknown argument {args:?} for {}", stringify!($exportname));
                     }
-                    if let Err(e) = body($dbg) {
-                        log::warn!("callback for {} failed: {}", stringify!($funcname), e.message());
-                    }
-                    Ok(())
                 }
+                $dbg.go();
+                log::debug!("exiting {} {args:?}", stringify!($funcname));
+                Ok(())
             })
         }
     };

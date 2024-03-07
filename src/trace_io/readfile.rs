@@ -1,21 +1,17 @@
-use crate::{debugger::Debugger, get_args, trace_call_return};
+use crate::{debugger::Debugger, get_args, trace_call};
+use base64::prelude::{Engine, BASE64_STANDARD};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     ptr,
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Mutex,
-    },
+    sync::{atomic::AtomicPtr, Mutex},
 };
-use windows::{
-    core::{Error, Result},
-    Win32::Foundation::E_UNEXPECTED,
-};
+use windows::core::Result;
 
 pub(super) static READFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, ReadFileArgs>>> =
     AtomicPtr::new(ptr::null_mut());
 
-struct ReadFileArgs {
+pub(super) struct ReadFileArgs {
     handle: usize,
     buffer_addr: usize,
     buffer_size: usize,
@@ -37,55 +33,53 @@ fn filter_readfile(
     buffer_size: usize,
     buffer_len_addr: usize,
 ) -> Result<bool> {
-    log::debug!("In filter_readfile(handle={handle:x})");
-
-    let interested = super::is_handle_registered(handle)?;
-    if interested {
-        let args = ReadFileArgs {
-            handle,
-            buffer_addr,
-            buffer_size,
-            buffer_len_addr,
-        };
-        register_args(dbg, args)?;
+    if !super::is_handle_registered(handle)? {
+        return Ok(false);
     }
-    Ok(interested)
+    let rf = ReadFileArgs {
+        handle,
+        buffer_addr,
+        buffer_size,
+        buffer_len_addr,
+    };
+    register_args(dbg, rf)?;
+    Ok(true)
 }
 
-fn trace_readfile_inner(dbg: &Debugger, wide_string: bool) -> Result<()> {
-    let Some(ReadFileArgs { filename }) = get_args(dbg)? else {
+fn trace_readfile_inner(dbg: &Debugger) -> Result<()> {
+    let Some(ReadFileArgs {
+        handle,
+        buffer_addr,
+        mut buffer_size,
+        buffer_len_addr,
+    }) = get_args(dbg)?
+    else {
         // We were not interested
         return Ok(());
     };
-    let handle = dbg.get_return_value()?;
-    if handle == u32::MAX as usize {
-        // CreateFileW failed
+    let success = dbg.get_return_value()?;
+    if success == 0 {
+        log::debug!("read failed on handle {handle:x}");
         return Ok(());
     }
+    let filename = super::get_registered_handle(handle)?.map(Cow::Owned);
 
-    let funcname = if wide_string {
-        "CreateFileW"
-    } else {
-        "CreateFileA"
-    };
+    if buffer_len_addr != 0 {
+        buffer_size = unsafe { dbg.derefence::<u32>(buffer_len_addr) }? as usize;
+    }
+    let mut buf = vec![0u8; buffer_size];
+    dbg.read_memory_exact(buffer_addr, &mut buf[..])?;
 
-    super::register_handle(handle, filename.clone())?;
-    log::info!("Tracing handle {handle:x} for file {filename:?}");
     let fc = super::FuncCall {
-        funcname: funcname.into(),
+        funcname: "ReadFile".into(),
+        buffer: Some(BASE64_STANDARD.encode(&buf[..]).into()),
         handle,
-        filename: Some(filename.into()),
-        ..Default::default()
+        filename,
     };
-    dbg.logln(serde_json::to_string(&fc).unwrap());
-
+    crate::save_call(&fc);
     Ok(())
 }
 
-trace_call_return!(trace_readfilew, dbg, { filter_readfile(dbg, filename_addr, true) }, CreateFileW(filename_addr) {{
-    trace_readfile_inner(dbg, true)
-}});
-
-trace_call_return!(trace_readfilea, dbg, { filter_readfile(dbg, filename_addr, false) }, CreateFileA(filename_addr) {{
-    trace_readfile_inner(dbg, false)
+trace_call!(RET trace_readfile, dbg, { filter_readfile(dbg, handle, buffer_addr, buffer_size, buffer_len_addr) }, ReadFile(handle, buffer_addr, buffer_size, buffer_len_addr) {{
+    trace_readfile_inner(dbg)
 }});

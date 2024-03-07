@@ -2,6 +2,7 @@ use std::{
     ffi::OsString,
     mem::{size_of, MaybeUninit},
     os::windows::ffi::OsStringExt,
+    ptr::addr_of_mut,
 };
 
 use windows::{
@@ -13,7 +14,8 @@ use windows::{
                 IDebugBreakpoint, IDebugControl3, IDebugDataSpaces4, IDebugRegisters,
                 IDebugSymbols, DEBUG_ANY_ID, DEBUG_BREAKPOINT_CODE, DEBUG_BREAKPOINT_ENABLED,
                 DEBUG_BREAKPOINT_ONE_SHOT, DEBUG_EXECUTE_ECHO, DEBUG_OUTCTL_ALL_CLIENTS,
-                DEBUG_OUTPUT_NORMAL,
+                DEBUG_VALUE, DEBUG_VALUE_INT16, DEBUG_VALUE_INT32, DEBUG_VALUE_INT64,
+                DEBUG_VALUE_INT8,
             },
             SystemInformation::{
                 IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM,
@@ -97,9 +99,27 @@ impl_numbers!(i16);
 impl_numbers!(i32);
 impl_numbers!(i64);
 
+#[cfg(target_pointer_width = "64")]
+const POINTER_TYPE: u32 = DEBUG_VALUE_INT64;
+#[cfg(target_pointer_width = "32")]
+const POINTER_TYPE: u32 = DEBUG_VALUE_INT32;
+
+mod execution_status;
+pub use execution_status::ExecutionStatus;
+
 fn get_processor_type(control: &IDebugControl3) -> Result<ProcessorType> {
     let ptype = unsafe { control.GetActualProcessorType() }?;
     Ok(ProcessorType::from_u32(ptype))
+}
+
+fn extract_value(value: DEBUG_VALUE) -> usize {
+    match value.Type {
+        DEBUG_VALUE_INT8 => (unsafe { value.Anonymous.I8 }) as usize,
+        DEBUG_VALUE_INT16 => (unsafe { value.Anonymous.I16 }) as usize,
+        DEBUG_VALUE_INT32 => (unsafe { value.Anonymous.I32 }) as usize,
+        DEBUG_VALUE_INT64 => (unsafe { value.Anonymous.Anonymous.I64 }) as usize,
+        _ => panic!("Unhandled DEBUG_VALUE_TYPE {}", value.Type),
+    }
 }
 
 impl Debugger {
@@ -305,7 +325,7 @@ impl Debugger {
     pub fn add_breakpoint(
         &self,
         symbol: impl Into<String>,
-        command: Option<impl Into<String>>,
+        command: Option<impl Into<Vec<u8>>>,
     ) -> Result<Breakpoint> {
         let c_symbol = to_cstring!(symbol.into())?;
         let bp = unsafe {
@@ -314,16 +334,9 @@ impl Debugger {
         }?;
         unsafe { bp.SetOffsetExpression(PCSTR::from_raw(c_symbol.as_ptr().cast())) }?;
         unsafe { bp.AddFlags(DEBUG_BREAKPOINT_ENABLED) }?;
-        match command {
-            Some(c) => {
-                let mut command = c.into();
-                command.push_str("; g");
-                let cmd = to_cstring!(command.into_bytes())?;
-                unsafe { bp.SetCommand(PCSTR::from_raw(cmd.as_ptr().cast())) }?;
-            }
-            None => {
-                unsafe { bp.SetCommand(PCSTR::from_raw(b"g\0".as_ptr())) }?;
-            }
+        if let Some(c) = command {
+            let cmd = to_cstring!(c)?;
+            unsafe { bp.SetCommand(PCSTR::from_raw(cmd.as_ptr().cast())) }?;
         }
 
         log::debug!(
@@ -338,26 +351,6 @@ impl Debugger {
         unsafe { self.control.RemoveBreakpoint(&bp.0) }
     }
 
-    fn output(&self, mask: u32, buf: impl Into<Vec<u8>>) {
-        let Ok(cstr) = std::ffi::CString::new(buf.into()) else {
-            return;
-        };
-        let _ = unsafe {
-            self.control
-                .Output(mask, PCSTR::from_raw(cstr.as_ptr().cast()))
-        };
-    }
-
-    pub fn log(&self, line: impl Into<Vec<u8>>) {
-        self.output(DEBUG_OUTPUT_NORMAL, line)
-    }
-
-    pub fn logln(&self, line: impl Into<Vec<u8>>) {
-        let mut buf = line.into();
-        buf.push(b'\n');
-        self.output(DEBUG_OUTPUT_NORMAL, buf)
-    }
-
     pub fn run(&self, cmd: impl Into<Vec<u8>>) -> Result<()> {
         let c_cmd = to_cstring!(cmd)?;
         log::debug!("running {:?}", c_cmd.to_str().unwrap());
@@ -370,12 +363,110 @@ impl Debugger {
         }
     }
 
+    pub fn eval(&self, cmd: impl Into<Vec<u8>>) -> Result<usize> {
+        let c_cmd = to_cstring!(cmd)?;
+        log::trace!("evaluating {:?}", c_cmd.to_str().unwrap());
+
+        let mut value = MaybeUninit::uninit();
+        unsafe {
+            self.control.Evaluate(
+                PCSTR::from_raw(c_cmd.as_ptr().cast()),
+                POINTER_TYPE,
+                value.as_mut_ptr(),
+                None,
+            )
+        }?;
+        Ok(extract_value(unsafe { value.assume_init() }))
+    }
+
     pub fn get_return_address(&self) -> Result<usize> {
         let ra = unsafe { self.control.GetReturnOffset() }?;
         Ok(ra as usize)
     }
 
     pub fn get_thread_id(&self) -> Result<usize> {
-        self.get_register_value("$tid")
+        self.eval("$tid")
+    }
+
+    pub fn get_execution_status(&self) -> Result<ExecutionStatus> {
+        let raw_es = unsafe { self.control.GetExecutionStatus() }?;
+        let e = ExecutionStatus::from_u32(raw_es).ok_or(windows::core::Error::new(
+            windows::Win32::Foundation::E_INVALIDARG,
+            "Invalid execution status",
+        ))?;
+        log::debug!("get_execution_status(): {e:?}");
+        Ok(e)
+    }
+    pub fn set_execution_status(&self, e: ExecutionStatus) -> Result<()> {
+        let ret = unsafe { self.control.SetExecutionStatus(e as u32) };
+        log::debug!("set_execution_status({e:?}): {ret:?}");
+        ret
+    }
+
+    pub fn go(&self) {
+        if let Err(e) = self.set_execution_status(ExecutionStatus::Go) {
+            log::warn!("Could not resume execution: {}", e.message());
+        }
+    }
+
+    fn peek_instruction(&self, offset: Option<usize>, disas: &mut String) -> Result<()> {
+        let offset = match offset {
+            Some(o) => o,
+            None => self.get_ip()?,
+        } as u64;
+        disas.clear();
+        disas.reserve(64);
+        let mut disas_size = 0;
+        let mut end_offset = 0;
+        unsafe {
+            let buf = disas.as_mut_vec();
+            self.control.Disassemble(
+                offset,
+                0,
+                Some(std::slice::from_raw_parts_mut(
+                    buf.as_mut_ptr(),
+                    buf.capacity(),
+                )),
+                Some(addr_of_mut!(disas_size)),
+                addr_of_mut!(end_offset),
+            )?;
+            buf.set_len(disas_size as usize);
+        }
+        Ok(())
+    }
+
+    pub fn continue_to_next_return(&self) -> Result<()> {
+        let mut disas = String::new();
+        loop {
+            let _ = self.get_execution_status();
+            self.set_execution_status(ExecutionStatus::StepOver)?;
+            self.peek_instruction(None, &mut disas)?;
+            if disas.starts_with("ret") {
+                return Ok(());
+            }
+        }
+    }
+
+    pub fn probe(&self, location: impl AsRef<str>) -> Result<()> {
+        let location = location.as_ref();
+        let function = location
+            .split_once('!')
+            .map(|(_, f)| f)
+            .unwrap_or(location)
+            .to_lowercase();
+        let cmd = format!("!trace_{function}");
+        self.add_breakpoint(location, Some(cmd))?;
+        Ok(())
+    }
+
+    pub fn retprobe(&self, location: impl AsRef<str>) -> Result<()> {
+        let location = location.as_ref();
+        let function = location
+            .split_once('!')
+            .map(|(_, f)| f)
+            .unwrap_or(location)
+            .to_lowercase();
+        self.add_breakpoint(location, Some(format!("!trace_{function} entry")))?;
+        Ok(())
     }
 }

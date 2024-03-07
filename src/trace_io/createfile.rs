@@ -1,48 +1,24 @@
-use crate::{debugger::Debugger, get_args, trace_call_return};
+use crate::{debugger::Debugger, get_args, trace_call};
 use std::{
     collections::HashMap,
     ptr,
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Mutex,
-    },
+    sync::{atomic::AtomicPtr, Mutex},
 };
-use windows::{
-    core::{Error, Result},
-    Win32::Foundation::E_UNEXPECTED,
-};
+use windows::core::Result;
 
-static CREATEFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, CreateFileArgs>>> =
+pub(super) static CREATEFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, CreateFileArgs>>> =
     AtomicPtr::new(ptr::null_mut());
 
-struct CreateFileArgs {
+pub(super) struct CreateFileArgs {
     filename: String,
 }
 
-fn get_createfile_args() -> &'static Mutex<HashMap<usize, CreateFileArgs>> {
-    let hm = CREATEFILE_ARGS.load(Ordering::Relaxed);
-    debug_assert_ne!(hm, ptr::null_mut(), "HANDLE has not been initialized");
-    unsafe { &*hm }
-}
-
-fn register_args(dbg: &Debugger, args: CreateFileArgs) -> Result<()> {
-    let tid = dbg.get_thread_id()?;
-
-    let mut createfile_args = get_createfile_args()
-        .lock()
-        .map_err(|_| Error::new(E_UNEXPECTED, "Could not lock CREATEFILE_ARGS"))?;
-    createfile_args.insert(tid, args);
-    Ok(())
+fn register_args(dbg: &Debugger, arg: CreateFileArgs) -> Result<()> {
+    super::register_args(dbg, &CREATEFILE_ARGS, arg)
 }
 
 fn get_args(dbg: &Debugger) -> Result<Option<CreateFileArgs>> {
-    let tid = dbg.get_thread_id()?;
-
-    let mut createfile_args = get_createfile_args()
-        .lock()
-        .map_err(|_| Error::new(E_UNEXPECTED, "Could not lock CREATEFILE_ARGS"))?;
-    let args = createfile_args.remove(&tid);
-    Ok(args)
+    super::get_args(dbg, &CREATEFILE_ARGS)
 }
 
 fn filter_createfile(dbg: &Debugger, filename_addr: usize, wide_string: bool) -> Result<bool> {
@@ -91,15 +67,16 @@ fn trace_createfile_inner(dbg: &Debugger, wide_string: bool) -> Result<()> {
         filename: Some(filename.into()),
         ..Default::default()
     };
-    dbg.logln(serde_json::to_string(&fc).unwrap());
+
+    crate::save_call(&fc);
 
     Ok(())
 }
 
-trace_call_return!(trace_createfilew, dbg, { filter_createfile(dbg, filename_addr, true) }, CreateFileW(filename_addr) {{
+trace_call!(RET trace_createfilew, dbg, { filter_createfile(dbg, filename_addr, true) }, CreateFileW(filename_addr) {{
     trace_createfile_inner(dbg, true)
 }});
 
-trace_call_return!(trace_createfilea, dbg, { filter_createfile(dbg, filename_addr, false) }, CreateFileA(filename_addr) {{
+trace_call!(RET trace_createfilea, dbg, { filter_createfile(dbg, filename_addr, false) }, CreateFileA(filename_addr) {{
     trace_createfile_inner(dbg, false)
 }});
