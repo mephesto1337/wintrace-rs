@@ -66,7 +66,6 @@ fn trace_createfile_inner(dbg: &Debugger, wide_string: bool) -> Result<()> {
     };
 
     super::register_handle(handle, filename.clone())?;
-    log::info!("Tracing handle {handle:x} for file {filename:?}");
     let fc = super::FuncCall {
         funcname: funcname.into(),
         handle,

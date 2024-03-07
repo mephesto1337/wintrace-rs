@@ -1,8 +1,12 @@
-use crate::{debugger::Debugger, helpers};
+use crate::{
+    debugger::Debugger,
+    helpers::{self, wrap},
+};
 use serde::Serialize;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
+    ffi::c_void,
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
@@ -10,7 +14,7 @@ use std::{
     },
 };
 use windows::{
-    core::{Error, Result},
+    core::{Error, Result, HRESULT, PCSTR},
     Win32::Foundation::E_UNEXPECTED,
 };
 
@@ -108,7 +112,11 @@ fn unregister_handle(handle: usize) -> Result<Option<String>> {
             "Could not lock handles for writing",
         )
     })?;
-    Ok(handles.remove(&handle))
+    let ret = handles.remove(&handle);
+    if let Some(filename) = ret.as_ref() {
+        log::info!("Unregister handle {handle:x} for {filename:?}");
+    }
+    Ok(ret)
 }
 
 fn register_handle(handle: usize, filename: String) -> Result<()> {
@@ -118,6 +126,7 @@ fn register_handle(handle: usize, filename: String) -> Result<()> {
             "Could not lock handles for writing",
         )
     })?;
+    log::info!("Register handle {handle:x} for {filename:?}");
     handles.insert(handle, filename);
     Ok(())
 }
@@ -140,6 +149,19 @@ fn is_handle_registered(handle: usize) -> Result<bool> {
         )
     })?;
     Ok(handles.contains_key(&handle))
+}
+
+#[no_mangle]
+pub extern "C" fn register_handles(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
+    wrap(raw_client, args, "register_handles", |_dbg, args| {
+        for val in args
+            .split_whitespace()
+            .filter_map(|s| usize::from_str_radix(s, 16).ok())
+        {
+            register_handle(val, String::new())?;
+        }
+        Ok(())
+    })
 }
 
 #[derive(Debug, Serialize, Default)]
