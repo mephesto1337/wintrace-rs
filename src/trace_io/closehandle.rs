@@ -2,7 +2,7 @@ use crate::{debugger::Debugger, trace_call};
 use std::borrow::Cow;
 use windows::core::Result;
 
-fn trace_closehandle_inner(_dbg: &Debugger, handle: usize) -> Result<()> {
+fn trace_closehandle_inner(dbg: &Debugger, handle: usize) -> Result<()> {
     let filename = super::unregister_handle(handle)?.map(Cow::Owned);
 
     if filename.is_none() {
