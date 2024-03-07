@@ -154,11 +154,13 @@ fn is_handle_registered(handle: usize) -> Result<bool> {
 #[no_mangle]
 pub extern "C" fn register_handles(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
     wrap(raw_client, args, "register_handles", |_dbg, args| {
-        for val in args
-            .split_whitespace()
-            .filter_map(|s| usize::from_str_radix(s, 16).ok())
-        {
-            register_handle(val, String::new())?;
+        for handle_label in args.split_whitespace() {
+            let (handle, label) = handle_label.split_once('=').unwrap_or((handle_label, ""));
+            let Ok(handle) = usize::from_str_radix(handle, 16) else {
+                log::warn!("Could not parse hex number {handle:?}");
+                continue;
+            };
+            register_handle(handle, label.into())?;
         }
         Ok(())
     })
@@ -166,6 +168,7 @@ pub extern "C" fn register_handles(raw_client: *mut c_void, args: PCSTR) -> HRES
 
 #[derive(Debug, Serialize, Default)]
 struct FuncCall<'a> {
+    pub exename: Cow<'a, str>,
     pub funcname: Cow<'a, str>,
     pub handle: usize,
     #[serde(skip_serializing_if = "Option::is_none")]

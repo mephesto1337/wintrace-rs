@@ -11,6 +11,7 @@ fn trace_closehandle_inner(_dbg: &Debugger, handle: usize) -> Result<()> {
     }
 
     let fc = super::FuncCall {
+        exename: dbg.process(),
         funcname: "CloseHandle".into(),
         handle,
         filename,

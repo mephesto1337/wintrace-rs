@@ -75,6 +75,7 @@ fn trace_writefile_inner(dbg: &Debugger) -> Result<()> {
         buffer: Some(BASE64_STANDARD.encode(&buf[..]).into()),
         handle,
         filename,
+        exename: dbg.process(),
     };
     crate::save_call(&fc);
     Ok(())

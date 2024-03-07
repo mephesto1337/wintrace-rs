@@ -71,6 +71,7 @@ fn trace_readfile_inner(dbg: &Debugger) -> Result<()> {
     dbg.read_memory_exact(buffer_addr, &mut buf[..])?;
 
     let fc = super::FuncCall {
+        exename: dbg.process(),
         funcname: "ReadFile".into(),
         buffer: Some(BASE64_STANDARD.encode(&buf[..]).into()),
         handle,

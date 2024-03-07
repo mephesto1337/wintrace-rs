@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     ffi::OsString,
     mem::{size_of, MaybeUninit},
     os::windows::ffi::OsStringExt,
@@ -11,11 +12,11 @@ use windows::{
         Foundation::ERROR_DS_DECODING_ERROR,
         System::{
             Diagnostics::Debug::Extensions::{
-                IDebugBreakpoint, IDebugControl3, IDebugDataSpaces4, IDebugRegisters,
+                IDebugBreakpoint, IDebugClient, IDebugControl3, IDebugDataSpaces4, IDebugRegisters,
                 IDebugSymbols, DEBUG_ANY_ID, DEBUG_BREAKPOINT_CODE, DEBUG_BREAKPOINT_ENABLED,
                 DEBUG_BREAKPOINT_ONE_SHOT, DEBUG_EXECUTE_ECHO, DEBUG_OUTCTL_ALL_CLIENTS,
-                DEBUG_VALUE, DEBUG_VALUE_INT16, DEBUG_VALUE_INT32, DEBUG_VALUE_INT64,
-                DEBUG_VALUE_INT8,
+                DEBUG_PROC_DESC_NO_PATHS, DEBUG_VALUE, DEBUG_VALUE_INT16, DEBUG_VALUE_INT32,
+                DEBUG_VALUE_INT64, DEBUG_VALUE_INT8,
             },
             SystemInformation::{
                 IMAGE_FILE_MACHINE, IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM,
@@ -42,6 +43,7 @@ pub struct Debugger {
     dataspaces: IDebugDataSpaces4,
     _symbols: IDebugSymbols,
     ptype: ProcessorType,
+    process: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,15 +130,38 @@ impl Debugger {
         let registers = unk.cast()?;
         let dataspaces = unk.cast()?;
         let _symbols = unk.cast()?;
+        let client: IDebugClient = unk.cast()?;
         let ptype = get_processor_type(&control)?;
 
+        let pid = Self::eval_helper(&control, "$pid")?;
+        let process = unsafe {
+            let mut exename = vec![0u8; 256];
+            let mut exesize = 0;
+            client.GetRunningProcessDescription(
+                0,
+                pid as u32,
+                DEBUG_PROC_DESC_NO_PATHS,
+                Some(&mut exename[..]),
+                Some(addr_of_mut!(exesize)),
+                None,
+                None,
+            )?;
+            assert!((exesize as usize) < exename.len());
+            exename.set_len(exesize as usize);
+            String::from_utf8_unchecked(exename)
+        };
         Ok(Self {
             control,
             registers,
             dataspaces,
             _symbols,
             ptype,
+            process,
         })
+    }
+
+    pub fn process(&self) -> Cow<'_, str> {
+        self.process.as_str().into()
     }
 
     pub fn get_processor_type(&self) -> ProcessorType {
@@ -363,13 +388,13 @@ impl Debugger {
         }
     }
 
-    pub fn eval(&self, cmd: impl Into<Vec<u8>>) -> Result<usize> {
+    fn eval_helper(control: &IDebugControl3, cmd: impl Into<Vec<u8>>) -> Result<usize> {
         let c_cmd = to_cstring!(cmd)?;
         log::trace!("evaluating {:?}", c_cmd.to_str().unwrap());
 
         let mut value = MaybeUninit::uninit();
         unsafe {
-            self.control.Evaluate(
+            control.Evaluate(
                 PCSTR::from_raw(c_cmd.as_ptr().cast()),
                 POINTER_TYPE,
                 value.as_mut_ptr(),
@@ -377,6 +402,9 @@ impl Debugger {
             )
         }?;
         Ok(extract_value(unsafe { value.assume_init() }))
+    }
+    pub fn eval(&self, cmd: impl Into<Vec<u8>>) -> Result<usize> {
+        Self::eval_helper(&self.control, cmd)
     }
 
     pub fn get_return_address(&self) -> Result<usize> {
