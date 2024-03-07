@@ -61,20 +61,6 @@ where
     }
 }
 
-#[macro_export]
-macro_rules! get_args {
-    ( $dbg:ident, $($xs:ident),* ) => {
-        get_args!(PRIV $dbg, 0, $($xs),*)
-    };
-    ( PRIV $dbg:ident, $index:expr, $x:ident ) => {
-        let $x = $dbg.get_arg($index)?;
-    };
-    ( PRIV $dbg:ident, $index:expr, $x:ident, $($xs:ident),* ) => {
-        let $x = $dbg.get_arg($index)?;
-        get_args!(PRIV $dbg, $index + 1, $($xs),*)
-    };
-}
-
 /// `$filter` must store whatever necessary for `$exit_body`
 #[macro_export]
 macro_rules! trace_call {
@@ -87,7 +73,7 @@ macro_rules! trace_call {
             $crate::helpers::wrap( raw_client, args, stringify!($funcname), |$dbg, _args| -> Result<()> {
                 use ::std::fmt::Write;
 
-                get_args!($dbg, $($args),*);
+                trace_call!(__GET_ARGS $dbg, $($args),*);
 
                 #[allow(unused_variables)]
                 fn filter_func($dbg: &$crate::debugger::Debugger, $($args: usize),*) -> ::windows::core::Result<bool> {
@@ -128,7 +114,7 @@ macro_rules! trace_call {
 
                 match args.as_str() {
                     "entry" => {
-                        get_args!($dbg, $($args),*);
+                        trace_call!(__GET_ARGS $dbg, $($args),*);
 
                         #[allow(unused_variables)]
                         fn filter_func($dbg: &$crate::debugger::Debugger, $($args: usize),*) -> ::windows::core::Result<bool> {
@@ -167,5 +153,15 @@ macro_rules! trace_call {
                 Ok(())
             })
         }
+    };
+    ( __GET_ARGS $dbg:ident, $($xs:ident),* ) => {
+        trace_call!(__GET_ARGS PRIV $dbg, 0, $($xs),*)
+    };
+    ( __GET_ARGS PRIV $dbg:ident, $index:expr, $x:ident ) => {
+        let $x = $dbg.get_arg($index)?;
+    };
+    ( __GET_ARGS PRIV $dbg:ident, $index:expr, $x:ident, $($xs:ident),* ) => {
+        let $x = $dbg.get_arg($index)?;
+        trace_call!(__GET_ARGS PRIV $dbg, $index + 1, $($xs),*)
     };
 }

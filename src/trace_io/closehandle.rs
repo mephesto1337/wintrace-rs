@@ -1,4 +1,4 @@
-use crate::{debugger::Debugger, get_args, trace_call};
+use crate::{debugger::Debugger, trace_call};
 use std::borrow::Cow;
 use windows::core::Result;
 
