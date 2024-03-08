@@ -42,11 +42,16 @@ where
 {
     let args = unsafe { args.to_string() }.unwrap_or_default();
     let Some(client) = (unsafe { IUnknown::from_raw_borrowed(&raw_client) }) else {
+        log::error!("Could not create IUnknown interface from {raw_client:x?}");
         return E_ABORT;
     };
 
-    let Ok(dbg) = Debugger::new(client) else {
-        return E_ABORT;
+    let dbg = match Debugger::new(client) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Could not create Debugger from interface: {e}");
+            return E_ABORT;
+        }
     };
 
     if let Err(e) = callback(&dbg, args.clone()) {
@@ -56,7 +61,7 @@ where
         );
         e.code()
     } else {
-        log::debug!("Callback {funcname}({args:?}) succeded");
+        log::debug!("Callback !{funcname}({args:?}) succeded");
         S_OK
     }
 }
@@ -70,7 +75,7 @@ macro_rules! trace_call {
     ($exportname:ident, $dbg:ident, { $filter:expr }, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
         #[no_mangle]
         pub extern "C" fn $exportname(raw_client: *mut ::std::ffi::c_void, args: ::windows::core::PCSTR) -> ::windows::core::HRESULT {
-            $crate::helpers::wrap( raw_client, args, stringify!($funcname), |$dbg, _args| -> Result<()> {
+            $crate::helpers::wrap( raw_client, args, stringify!($exportname), |$dbg, _args| -> Result<()> {
                 use ::std::fmt::Write;
 
                 trace_call!(__GET_ARGS $dbg, $($args),*);
@@ -107,7 +112,7 @@ macro_rules! trace_call {
     (RET $exportname:ident, $dbg:ident, { $filter:expr }, $funcname:ident ( $($args:ident),*) { $body:expr }) => {
         #[no_mangle]
         pub extern "C" fn $exportname(raw_client: *mut ::std::ffi::c_void, args: ::windows::core::PCSTR) -> ::windows::core::HRESULT {
-            $crate::helpers::wrap( raw_client, args, stringify!($funcname), |$dbg, args| -> Result<()> {
+            $crate::helpers::wrap( raw_client, args, stringify!($exportname), |$dbg, args| -> Result<()> {
                 use ::std::fmt::Write;
                 let ip = $dbg.get_ip()?;
                 log::debug!("break on 0x{ip:x} for {} with {args:?}", stringify!($funcname));

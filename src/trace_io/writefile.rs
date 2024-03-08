@@ -11,6 +11,7 @@ use windows::core::Result;
 pub(super) static WRITEFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, WriteFileArgs>>> =
     AtomicPtr::new(ptr::null_mut());
 
+#[derive(Debug)]
 pub(super) struct WriteFileArgs {
     handle: usize,
     buffer_addr: usize,

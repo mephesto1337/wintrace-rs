@@ -120,7 +120,10 @@ fn extract_value(value: DEBUG_VALUE) -> usize {
         DEBUG_VALUE_INT16 => (unsafe { value.Anonymous.I16 }) as usize,
         DEBUG_VALUE_INT32 => (unsafe { value.Anonymous.I32 }) as usize,
         DEBUG_VALUE_INT64 => (unsafe { value.Anonymous.Anonymous.I64 }) as usize,
-        _ => panic!("Unhandled DEBUG_VALUE_TYPE {}", value.Type),
+        _ => {
+            log::error!("Unhandled DEBUG_VALUE_TYPE {}; panic!", value.Type);
+            panic!("Unhandled DEBUG_VALUE_TYPE {}", value.Type)
+        }
     }
 }
 
@@ -130,10 +133,11 @@ impl Debugger {
         let registers = unk.cast()?;
         let dataspaces = unk.cast()?;
         let _symbols = unk.cast()?;
-        let client: IDebugClient = unk.cast()?;
         let ptype = get_processor_type(&control)?;
 
-        let pid = Self::eval_helper(&control, "$pid")?;
+        let client: IDebugClient = unk.cast()?;
+        let pid = Self::eval_helper(&control, "$tpid")?;
+        log::debug!("Current PID: {pid}");
         let process = unsafe {
             let mut exename = vec![0u8; 256];
             let mut exesize = 0;
@@ -146,8 +150,8 @@ impl Debugger {
                 None,
                 None,
             )?;
-            assert!((exesize as usize) < exename.len());
-            exename.set_len(exesize as usize);
+            assert!((exesize as usize) < exename.len() && exesize > 1);
+            exename.set_len((exesize - 1) as usize);
             String::from_utf8_unchecked(exename)
         };
         Ok(Self {
@@ -390,7 +394,7 @@ impl Debugger {
 
     fn eval_helper(control: &IDebugControl3, cmd: impl Into<Vec<u8>>) -> Result<usize> {
         let c_cmd = to_cstring!(cmd)?;
-        log::trace!("evaluating {:?}", c_cmd.to_str().unwrap());
+        log::debug!("evaluating {:?}", c_cmd.to_str().unwrap());
 
         let mut value = MaybeUninit::uninit();
         unsafe {

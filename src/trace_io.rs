@@ -1,7 +1,4 @@
-use crate::{
-    debugger::Debugger,
-    helpers::{self, wrap},
-};
+use crate::{debugger::Debugger, helpers::wrap};
 use serde::Serialize;
 use std::{
     borrow::Cow,
@@ -49,15 +46,20 @@ fn get_args<T>(dbg: &Debugger, at: &AtomicPtr<Mutex<HashMap<usize, T>>>) -> Resu
     Ok(arg)
 }
 
-fn initialize_with<T, F>(at: &AtomicPtr<T>, f: F)
-where
-    F: FnOnce() -> T,
-{
-    let val = Box::leak(Box::new(f()));
-    let old_val = at.swap(val, Ordering::Relaxed);
-    if !old_val.is_null() {
-        let _ = unsafe { Box::from_raw(old_val) };
-    }
+macro_rules! initialize_with {
+    ($what:expr, $with:expr) => {
+        let val = $with;
+        log::debug!(
+            "Initialized {} with {}/{val:?}",
+            stringify!($what),
+            stringify!($with),
+        );
+        let val = Box::into_raw(Box::new(val));
+        let old_val = $what.swap(val, Ordering::Relaxed);
+        if !old_val.is_null() {
+            let _ = unsafe { Box::from_raw(old_val) };
+        }
+    };
 }
 
 fn deinitialize_at<T>(at: &AtomicPtr<T>) {
@@ -75,27 +77,10 @@ pub(super) fn deinit() {
 }
 
 pub(super) fn init() {
-    initialize_with(&HANDLES, Default::default);
-    initialize_with(&createfile::CREATEFILE_ARGS, Default::default);
-    initialize_with(&readfile::READFILE_ARGS, Default::default);
-    initialize_with(&writefile::WRITEFILE_ARGS, Default::default);
-    let logfilename = helpers::expand_env(r"%USERPROFILE%\Desktop\wintrace.log");
-    match std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(&logfilename)
-    {
-        Ok(f) => {
-            let _ = env_logger::builder()
-                .filter_level(log::LevelFilter::Info)
-                .target(env_logger::Target::Pipe(Box::new(f) as Box<_>))
-                .try_init();
-        }
-        Err(e) => {
-            env_logger::init();
-            log::warn!("Could not open log file ({logfilename}): {e}");
-        }
-    }
+    initialize_with!(&HANDLES, Default::default());
+    initialize_with!(&createfile::CREATEFILE_ARGS, Default::default());
+    initialize_with!(&readfile::READFILE_ARGS, Default::default());
+    initialize_with!(&writefile::WRITEFILE_ARGS, Default::default());
 }
 
 fn get_handles() -> &'static RwLock<BTreeMap<usize, String>> {
@@ -153,7 +138,18 @@ fn is_handle_registered(handle: usize) -> Result<bool> {
 
 #[no_mangle]
 pub extern "C" fn register_handles(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
-    wrap(raw_client, args, "register_handles", |_dbg, args| {
+    wrap(raw_client, args, "register_handles", |dbg, args| {
+        if args.is_empty() {
+            if let Ok(handles) = get_handles().read() {
+                for (handle, filename) in handles.iter() {
+                    log::info!("{handle:x}={filename}");
+                    let _ = dbg.run(format!(".echo {handle:x}={filename}"));
+                }
+            } else {
+                log::error!("Could not lock handles for reading");
+            }
+            return Ok(());
+        }
         for handle_label in args.split_whitespace() {
             let (handle, label) = handle_label.split_once('=').unwrap_or((handle_label, ""));
             let Ok(handle) = usize::from_str_radix(handle, 16) else {

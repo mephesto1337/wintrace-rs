@@ -14,6 +14,7 @@ pub(super) static CREATEFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, CreateFileArgs
     AtomicPtr::new(ptr::null_mut());
 pub static CREATE_FILE_REGEX: AtomicPtr<Regex> = AtomicPtr::new(ptr::null_mut());
 
+#[derive(Debug)]
 pub(super) struct CreateFileArgs {
     filename: String,
 }

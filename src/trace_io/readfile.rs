@@ -11,6 +11,7 @@ use windows::core::Result;
 pub(super) static READFILE_ARGS: AtomicPtr<Mutex<HashMap<usize, ReadFileArgs>>> =
     AtomicPtr::new(ptr::null_mut());
 
+#[derive(Debug)]
 pub(super) struct ReadFileArgs {
     handle: usize,
     buffer_addr: usize,

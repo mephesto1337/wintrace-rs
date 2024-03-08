@@ -64,14 +64,36 @@ pub extern "C" fn wintrace(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
     })
 }
 
+fn init_logging() {
+    let logfilename = helpers::expand_env(r"%USERPROFILE%\Desktop\wintrace.log");
+    match std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&logfilename)
+    {
+        Ok(mut f) => {
+            let _ = f.write("Test\n".as_bytes());
+            let _ = env_logger::builder()
+                .filter_level(log::LevelFilter::Info)
+                .target(env_logger::Target::Pipe(Box::new(f) as Box<_>))
+                .try_init();
+        }
+        Err(e) => {
+            env_logger::init();
+            log::warn!("Could not open log file ({logfilename}): {e}");
+        }
+    }
+}
+
 /// The DebugExtensionInitialize callback function is called by the engine after
 /// loading a DbgEng extension DLL. https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dbgeng/nc-dbgeng-pdebug_extension_initialize
 #[no_mangle]
 extern "C" fn DebugExtensionInitialize(_version: *mut u32, _flags: *mut u32) -> HRESULT {
+    init_logging();
     let f = match OpenOptions::new()
         .append(true)
         .create(true)
-        .open(expand_env(r"%USERPROFILE%\wintrace.json"))
+        .open(expand_env(r"%USERPROFILE%\Desktop\wintrace.json"))
     {
         Ok(f) => f,
         Err(e) => {
