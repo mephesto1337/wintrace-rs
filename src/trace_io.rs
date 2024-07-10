@@ -19,6 +19,8 @@ pub mod createfile;
 pub mod readfile;
 pub mod writefile;
 
+pub mod createfilemapping;
+pub mod mapviewoffile;
 
 fn register_args<T>(
     dbg: &Debugger,
