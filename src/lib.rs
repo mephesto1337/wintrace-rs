@@ -59,6 +59,9 @@ pub extern "C" fn wintrace(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
         dbg.retprobe("KERNELBASE!CreateFileW")?;
         dbg.retprobe("kernel32!ReadFile")?;
         dbg.retprobe("kernel32!WriteFile")?;
+        dbg.retprobe("kernel32!CreateFileMappingA")?;
+        dbg.retprobe("kernel32!CreateFileMappingW")?;
+        dbg.retprobe("kernel32!MapViewofFile")?;
         dbg.probe("kernel32!CloseHandle")?;
 
         Ok(())
