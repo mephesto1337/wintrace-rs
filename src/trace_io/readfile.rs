@@ -1,4 +1,4 @@
-use crate::{debugger::Debugger, trace_call};
+use crate::{debugger::Debugger, trace_call, variables::HandleFile};
 use base64::prelude::{Engine, BASE64_STANDARD};
 use std::{
     borrow::Cow,
@@ -34,7 +34,7 @@ fn filter_readfile(
     buffer_size: usize,
     buffer_len_addr: usize,
 ) -> Result<bool> {
-    if !super::is_handle_registered(handle)? {
+    if !HandleFile::is_registered(handle)? {
         return Ok(false);
     }
     let rf = ReadFileArgs {
@@ -63,7 +63,7 @@ fn trace_readfile_inner(dbg: &Debugger) -> Result<()> {
         log::debug!("read failed on handle {handle:x}");
         return Ok(());
     }
-    let filename = super::get_registered_handle(handle)?.map(Cow::Owned);
+    let filename = HandleFile::get_tag(handle)?.map(Cow::Owned);
 
     if buffer_len_addr != 0 {
         buffer_size = unsafe { dbg.derefence::<u32>(buffer_len_addr) }? as usize;

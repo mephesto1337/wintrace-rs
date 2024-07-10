@@ -1,17 +1,16 @@
-use crate::{debugger::Debugger, helpers::wrap};
+use crate::debugger::Debugger;
 use serde::Serialize;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap},
-    ffi::c_void,
+    collections::HashMap,
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Mutex, RwLock,
+        Mutex,
     },
 };
 use windows::{
-    core::{Error, Result, HRESULT, PCSTR},
+    core::{Error, Result},
     Win32::Foundation::E_UNEXPECTED,
 };
 
@@ -20,7 +19,6 @@ pub mod createfile;
 pub mod readfile;
 pub mod writefile;
 
-static HANDLES: AtomicPtr<RwLock<BTreeMap<usize, String>>> = AtomicPtr::new(ptr::null_mut());
 
 fn register_args<T>(
     dbg: &Debugger,
@@ -70,96 +68,15 @@ fn deinitialize_at<T>(at: &AtomicPtr<T>) {
 }
 
 pub(super) fn deinit() {
-    deinitialize_at(&HANDLES);
     deinitialize_at(&readfile::READFILE_ARGS);
     deinitialize_at(&createfile::CREATEFILE_ARGS);
     deinitialize_at(&writefile::WRITEFILE_ARGS);
 }
 
 pub(super) fn init() {
-    initialize_with!(&HANDLES, Default::default());
     initialize_with!(&createfile::CREATEFILE_ARGS, Default::default());
     initialize_with!(&readfile::READFILE_ARGS, Default::default());
     initialize_with!(&writefile::WRITEFILE_ARGS, Default::default());
-}
-
-fn get_handles() -> &'static RwLock<BTreeMap<usize, String>> {
-    let handle = HANDLES.load(Ordering::Relaxed);
-    assert_ne!(handle, ptr::null_mut(), "HANDLE has not been initialized");
-
-    unsafe { &*handle }
-}
-
-fn unregister_handle(handle: usize) -> Result<Option<String>> {
-    let mut handles = get_handles().write().map_err(|_| {
-        ::windows::core::Error::new(
-            ::windows::Win32::Foundation::E_UNEXPECTED,
-            "Could not lock handles for writing",
-        )
-    })?;
-    let ret = handles.remove(&handle);
-    if let Some(filename) = ret.as_ref() {
-        log::info!("Unregister handle {handle:x} for {filename:?}");
-    }
-    Ok(ret)
-}
-
-fn register_handle(handle: usize, filename: String) -> Result<()> {
-    let mut handles = get_handles().write().map_err(|_| {
-        ::windows::core::Error::new(
-            ::windows::Win32::Foundation::E_UNEXPECTED,
-            "Could not lock handles for writing",
-        )
-    })?;
-    log::info!("Register handle {handle:x} for {filename:?}");
-    handles.insert(handle, filename);
-    Ok(())
-}
-
-fn get_registered_handle(handle: usize) -> Result<Option<String>> {
-    let handles = get_handles().read().map_err(|_| {
-        ::windows::core::Error::new(
-            ::windows::Win32::Foundation::E_UNEXPECTED,
-            "Could not lock handles for reading",
-        )
-    })?;
-    Ok(handles.get(&handle).cloned())
-}
-
-fn is_handle_registered(handle: usize) -> Result<bool> {
-    let handles = get_handles().read().map_err(|_| {
-        ::windows::core::Error::new(
-            ::windows::Win32::Foundation::E_UNEXPECTED,
-            "Could not lock handles for reading",
-        )
-    })?;
-    Ok(handles.contains_key(&handle))
-}
-
-#[no_mangle]
-pub extern "C" fn register_handles(raw_client: *mut c_void, args: PCSTR) -> HRESULT {
-    wrap(raw_client, args, "register_handles", |dbg, args| {
-        if args.is_empty() {
-            if let Ok(handles) = get_handles().read() {
-                for (handle, filename) in handles.iter() {
-                    log::info!("{handle:x}={filename}");
-                    let _ = dbg.run(format!(".echo {handle:x}={filename}"));
-                }
-            } else {
-                log::error!("Could not lock handles for reading");
-            }
-            return Ok(());
-        }
-        for handle_label in args.split_whitespace() {
-            let (handle, label) = handle_label.split_once('=').unwrap_or((handle_label, ""));
-            let Ok(handle) = usize::from_str_radix(handle, 16) else {
-                log::warn!("Could not parse hex number {handle:?}");
-                continue;
-            };
-            register_handle(handle, label.into())?;
-        }
-        Ok(())
-    })
 }
 
 #[derive(Debug, Serialize, Default)]

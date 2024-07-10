@@ -25,6 +25,7 @@ macro_rules! dlogln {
 pub mod debugger;
 pub mod helpers;
 pub mod trace_io;
+pub mod variables;
 
 use helpers::{expand_env, wrap};
 

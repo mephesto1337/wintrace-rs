@@ -1,4 +1,4 @@
-use crate::{debugger::Debugger, trace_call};
+use crate::{debugger::Debugger, trace_call, variables::HandleFile};
 use regex::Regex;
 use std::{
     collections::HashMap,
@@ -66,7 +66,7 @@ fn trace_createfile_inner(dbg: &Debugger, wide_string: bool) -> Result<()> {
         "CreateFileA"
     };
 
-    super::register_handle(handle, filename.clone())?;
+    HandleFile::register(handle, filename.clone())?;
     let fc = super::FuncCall {
         exename: dbg.process(),
         funcname: funcname.into(),
