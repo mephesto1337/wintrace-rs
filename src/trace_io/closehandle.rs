@@ -1,9 +1,11 @@
-use crate::{debugger::Debugger, trace_call, variables::HandleFile};
+use crate::{debugger::Debugger, trace_call, variables::unregister_handle_from_all};
 use std::borrow::Cow;
 use windows::core::Result;
 
 fn trace_closehandle_inner(dbg: &Debugger, handle: usize) -> Result<()> {
-    let filename = HandleFile::unregister(handle)?.map(Cow::Owned);
+    // Handle can be in any table
+
+    let filename = unregister_handle_from_all(handle)?.map(Cow::Owned);
 
     if filename.is_none() {
         // We were not tracking this handle

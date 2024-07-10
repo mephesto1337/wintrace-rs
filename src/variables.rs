@@ -2,7 +2,7 @@ use crate::helpers::wrap;
 use std::{
     collections::BTreeMap,
     ffi::c_void,
-    fmt::Debug,
+    fmt::{Debug, Display},
     ptr,
     sync::{
         atomic::{AtomicPtr, Ordering},
@@ -12,7 +12,7 @@ use std::{
 use windows::core::{Result, HRESULT, PCSTR};
 
 trait HandleType {
-    type Item: 'static + Debug + Clone;
+    type Item: 'static + Debug + Display + Clone;
 
     fn index() -> usize;
 }
@@ -20,6 +20,12 @@ trait HandleType {
 macro_rules! defined_handle_types {
     ($name:ident $($tt:tt)*) => {
         defined_handle_types!("", __inner, 0, $name $($tt)*);
+
+        pub(crate) fn unregister_handle_from_all(handle: usize) -> Result<Option<String>> {
+            let mut tag = None;
+            defined_handle_types!("", __inner_unregister_all, 0, tag, handle, $name $($tt)*);
+            Ok(tag)
+        }
     };
     ($x:literal, __inner_single, $counter:expr, $name:ident, $item:ty) => {
         #[derive(Debug)]
@@ -45,21 +51,42 @@ macro_rules! defined_handle_types {
             fn index() -> usize { $counter }
         }
     };
-    ($x:literal, __inner, $counter:expr, $name:ident ) => {
-        defined_handle_types!($x, __inner_single, $counter, $name, String);
+
+    // Final recursion step
+    ($x:literal, __inner, $counter:expr) => {
         pub const MAX_HANDLES_TYPE: usize = $counter + 1;
     };
-    ($x:literal, __inner, $counter:expr, $name:ident ( $item:ty) ) => {
+
+    // Recursion step
+    ($x:literal, __inner, $counter:expr, $name:ident ( $item:ty ) $($tt:tt)*) => {
         defined_handle_types!($x, __inner_single, $counter, $name, $item);
-        pub const MAX_HANDLES_TYPE: usize = $counter + 1;
+        defined_handle_types!($x, __inner, $counter + 1 $($tt)*);
     };
-    ($x:literal, __inner, $counter:expr, $name:ident ( $item:ty ), $($names:ident),*) => {
-        defined_handle_types!($x, __inner_single, $counter, $name, $item);
-        defined_handle_types!($x, __inner, $counter + 1, $($names),*);
-    };
-    ($x:literal, __inner, $counter:expr, $name:ident, $($names:ident),*) => {
+    ($x:literal, __inner, $counter:expr, $name:ident $($tt:tt)*) => {
         defined_handle_types!($x, __inner_single, $counter, $name, String);
-        defined_handle_types!($x, __inner, $counter + 1, $($names),*);
+        defined_handle_types!($x, __inner, $counter + 1 $($tt)*);
+    };
+
+    // Unregister from all - final step
+    ($x:literal, __inner_unregister_all, $counter:expr, $tag:ident, $handle:ident) => {
+    };
+    // Unregister from all - recursion step (special case for String)
+    ($x:literal, __inner_unregister_all, $counter:expr, $tag:ident, $handle:ident, $name:ident ( String ) $($tt:tt)*) => {
+        if $tag.is_none() && $name::is_registered($handle)? {
+            $tag = $name::unregister($handle)?
+        }
+        defined_handle_types!($x, __inner_unregister_all, $counter, $tag, $handle $($tt)*)
+    };
+    // Unregister from all - recursion step with custom type
+    ($x:literal, __inner_unregister_all, $counter:expr, $tag:ident, $handle:ident, $name:ident ( $item:ty ) $($tt:tt)*) => {
+        if $tag.is_none() && $name::is_registered($handle)? {
+            $tag = $name::unregister($handle)?.map(|t| t.to_string());
+        }
+        defined_handle_types!($x, __inner_unregister_all, $counter, $tag, $handle $($tt)*)
+    };
+    // Unregister from all - recursion step
+    ($x:literal, __inner_unregister_all, $counter:expr, $tag:ident, $handle:ident, $name:ident $($tt:tt)*) => {
+        defined_handle_types!($x, __inner_unregister_all, $counter, $tag, $handle, $name ( String ) $($tt)*)
     };
 }
 
